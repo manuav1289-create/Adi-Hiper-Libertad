@@ -11,7 +11,27 @@ function iso(d: Date) { return d.toISOString().slice(0,10); }
 
 // === UI helpers ===
 const Badge = (p:any)=><span style={{padding:"2px 8px",borderRadius:999,background:"#eee",fontSize:12}}>{p.children}</span>;
-const Button = ({ children, ...props }: any) => <button style={{border:"1px solid #ddd",borderRadius:16,padding:"8px 14px",background:"#fff"}} {...props}>{children}</button>;
+
+// 🔧 Botón global: texto negro, fondo blanco SIEMPRE (ignora color/background externos)
+const Button = ({ children, style = {}, ...props }: any) => {
+  const { color, background, backgroundColor, ...rest } = style || {};
+  return (
+    <button
+      {...props}
+      style={{
+        border: "1px solid #ddd",
+        borderRadius: 16,
+        padding: "8px 14px",
+        background: "#fff",   // fondo blanco
+        color: "#000",        // texto negro
+        ...rest,              // respeta width, opacity, etc.
+      }}
+    >
+      {children}
+    </button>
+  );
+};
+
 const Card = (p:any)=><div style={{border:"1px solid #e5e7eb",borderRadius:16,padding:16,background:"#fff"}}>{p.children}</div>;
 
 // === Tipos ===
@@ -35,7 +55,7 @@ function AuthCard({ onSignedIn }: { onSignedIn: () => void }) {
         <input type="email" required placeholder="tu@correo.com" value={email}
                onChange={(e)=>setEmail(e.target.value)}
                style={{padding:"8px 10px", border:"1px solid #ddd", borderRadius:12}}/>
-        <Button disabled={loading || !email} style={{background:"#111", color:"#fff"}}>{loading ? "Enviando..." : "Enviar enlace"}</Button>
+        <Button disabled={loading || !email}>{loading ? "Enviando..." : "Enviar enlace"}</Button>
       </form>
       {sent && <p style={{fontSize:12, marginTop:8}}>Revisá tu bandeja (y spam). Volvé con el enlace.</p>}
     </Card>
@@ -72,7 +92,7 @@ function ProfileForm({ profile, onSaved }: { profile: Profile; onSaved: () => vo
         </div>
       </div>
       <div style={{marginTop:12, display:"flex", gap:8}}>
-        <Button onClick={save} disabled={saving || !fullName || !hierarchy} style={{background:"#111", color:"#fff"}}>{saving ? "Guardando..." : "Guardar"}</Button>
+        <Button onClick={save} disabled={saving || !fullName || !hierarchy}>{saving ? "Guardando..." : "Guardar"}</Button>
         <Button onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}>Salir</Button>
       </div>
     </Card>
@@ -135,11 +155,9 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   useEffect(()=>{ refreshMonthData(); /* eslint-disable-next-line */}, [monthStart.getTime(), monthEnd.getTime()]);
 
   const tryReserve = async (dateISO: string, slot: TimeSlot) => {
-    // validar límites diarios
     const cur = myDayData[dateISO] || { count: 0, hours: 0 };
     if (cur.count >= 2) return alert("Límite diario: máximo 2 turnos.");
     if (cur.hours + slot.duration_hours > 8) return alert("Límite diario: máximo 8 horas.");
-    // insertar
     const { data: { user } } = await supabase.auth.getUser();
     const payload = { user_id: user?.id, date: dateISO, time_slot_id: slot.id };
     const { error } = await supabase.from("reservations").insert(payload);
@@ -178,8 +196,8 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
           </div>
         </div>
         <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
-          {profile.is_admin && <Button onClick={onOpenAdmin} style={{background:"#111", color:"#fff"}}>Administrar</Button>}
-          <Button onClick={exportCSV} style={{background:"#111", color:"#fff"}}>Exportar Excel (CSV)</Button>
+          {profile.is_admin && <Button onClick={onOpenAdmin}>Administrar</Button>}
+          <Button onClick={exportCSV}>Exportar Excel (CSV)</Button>
           <Button onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}>Salir</Button>
         </div>
       </div>
@@ -187,11 +205,11 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
       <Card>
         <div style={{display:"flex", gap:12, flexWrap:"wrap", alignItems:"center"}}>
           <div style={{display:"flex", alignItems:"center", gap:8}}>
-            <Button onClick={()=>setMonth(addMonths(month, -1))} style={{background:"#111", color:"#fff"}}>◀</Button>
+            <Button onClick={()=>setMonth(addMonths(month, -1))}>◀</Button>
             <div style={{minWidth:160, textAlign:"center", fontWeight:600}}>
               {month.toLocaleDateString("es-AR", { month:"long", year:"numeric" })}
             </div>
-            <Button onClick={()=>setMonth(addMonths(month, 1))} style={{background:"#111", color:"#fff"}}>▶</Button>
+            <Button onClick={()=>setMonth(addMonths(month, 1))}>▶</Button>
           </div>
           <div style={{display:"flex", alignItems:"center", gap:8}}>
             <label style={{fontSize:14, opacity:.8}}>Puesto</label>
@@ -251,8 +269,7 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
                         if (mine || profile.is_admin) {
                           return (
                             <td key={s.id} className="p-2">
-                              <Button className="w-full" style={{background:"#111", color:"#fff"}}
-                                      onClick={()=>cancelReservation(dateISO, s)}>
+                              <Button className="w-full" onClick={()=>cancelReservation(dateISO, s)}>
                                 {mine ? "Cancelar" : "Liberar"}
                               </Button>
                             </td>
@@ -267,7 +284,7 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
 
                       return (
                         <td key={s.id} className="p-2">
-                          <Button className="w-full" style={{background:"#111", color:"#fff"}} onClick={()=>tryReserve(dateISO, s)}>
+                          <Button className="w-full" onClick={()=>tryReserve(dateISO, s)}>
                             Reservar
                           </Button>
                         </td>
