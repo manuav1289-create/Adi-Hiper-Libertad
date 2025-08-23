@@ -1,7 +1,8 @@
-// @ts-nocheck
+﻿// @ts-nocheck
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
 import AdminPanel from "./components/AdminPanel";
+import * as XLSX from "xlsx"; // <-- para generar Excel
 
 // === FECHAS ===
 function startOfMonth(d: Date) { const x = new Date(d.getFullYear(), d.getMonth(), 1); x.setHours(0,0,0,0); return x; }
@@ -10,29 +11,9 @@ function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getM
 function iso(d: Date) { return d.toISOString().slice(0,10); }
 
 // === UI helpers ===
-const Badge = (p:any)=><span style={{padding:"2px 8px",borderRadius:999,background:"#eee",fontSize:12}}>{p.children}</span>;
-
-// 🔧 Botón global: texto negro, fondo blanco SIEMPRE (ignora color/background externos)
-const Button = ({ children, style = {}, ...props }: any) => {
-  const { color, background, backgroundColor, ...rest } = style || {};
-  return (
-    <button
-      {...props}
-      style={{
-        border: "1px solid #ddd",
-        borderRadius: 16,
-        padding: "8px 14px",
-        background: "#fff",   // fondo blanco
-        color: "#000",        // texto negro
-        ...rest,              // respeta width, opacity, etc.
-      }}
-    >
-      {children}
-    </button>
-  );
-};
-
-const Card = (p:any)=><div style={{border:"1px solid #e5e7eb",borderRadius:16,padding:16,background:"#fff"}}>{p.children}</div>;
+const Badge = (p:any)=><span style={{padding:"2px 8px",borderRadius:999,background:"#eee",fontSize:12,color:"#000"}}>{p.children}</span>;
+const Button = ({ children, ...props }: any) => <button style={{border:"1px solid #ddd",borderRadius:16,padding:"8px 14px",background:"#fff",color:"#000"}} {...props}>{children}</button>;
+const Card = (p:any)=><div style={{border:"1px solid #e5e7eb",borderRadius:16,padding:16,background:"#fff",color:"#000"}}>{p.children}</div>;
 
 // === Tipos ===
 type Puesto = { id: number; name: string };
@@ -49,15 +30,15 @@ function AuthCard({ onSignedIn }: { onSignedIn: () => void }) {
   };
   return (
     <Card>
-      <h2 style={{fontSize:20, marginBottom:8}}>Ingresá para reservar</h2>
-      <p style={{opacity:.8, fontSize:14}}>Recibirás un enlace mágico por correo (sin contraseña).</p>
+      <h2 style={{fontSize:20, marginBottom:8, color:"#000"}}>Ingresá para reservar</h2>
+      <p style={{opacity:.8, fontSize:14, color:"#000"}}>Recibirás un enlace mágico por correo (sin contraseña).</p>
       <form onSubmit={sendMagicLink} style={{display:"grid", gap:8, marginTop:8}}>
         <input type="email" required placeholder="tu@correo.com" value={email}
                onChange={(e)=>setEmail(e.target.value)}
                style={{padding:"8px 10px", border:"1px solid #ddd", borderRadius:12}}/>
-        <Button disabled={loading || !email}>{loading ? "Enviando..." : "Enviar enlace"}</Button>
+        <Button disabled={loading || !email} style={{background:"#111", color:"#fff"}}>{loading ? "Enviando..." : "Enviar enlace"}</Button>
       </form>
-      {sent && <p style={{fontSize:12, marginTop:8}}>Revisá tu bandeja (y spam). Volvé con el enlace.</p>}
+      {sent && <p style={{fontSize:12, marginTop:8, color:"#000"}}>Revisá tu bandeja (y spam). Volvé con el enlace.</p>}
     </Card>
   );
 }
@@ -77,14 +58,14 @@ function ProfileForm({ profile, onSaved }: { profile: Profile; onSaved: () => vo
   };
   return (
     <Card>
-      <h3 style={{fontSize:18, marginBottom:8}}>Tu perfil</h3>
+      <h3 style={{fontSize:18, marginBottom:8, color:"#000"}}>Tu perfil</h3>
       <div style={{display:"grid", gap:8, gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))"}}>
         <div>
-          <label style={{fontSize:12, opacity:.7}}>Apellido y Nombre</label>
+          <label style={{fontSize:12, opacity:.7, color:"#000"}}>Apellido y Nombre</label>
           <input style={{width:"100%", padding:"8px 10px", border:"1px solid #ddd", borderRadius:12}} value={fullName} onChange={(e)=>setFullName(e.target.value)} />
         </div>
         <div>
-          <label style={{fontSize:12, opacity:.7}}>Jerarquía</label>
+          <label style={{fontSize:12, opacity:.7, color:"#000"}}>Jerarquía</label>
           <select style={{width:"100%", padding:"8px 10px", border:"1px solid #ddd", borderRadius:12}} value={hierarchy} onChange={(e)=>setHierarchy(e.target.value)}>
             <option value="">Seleccioná...</option>
             {options.map((o) => <option key={o.code} value={o.code} disabled={!o.enabled}>{o.code} {!o.enabled ? "(no habilitada)" : ""}</option>)}
@@ -92,8 +73,8 @@ function ProfileForm({ profile, onSaved }: { profile: Profile; onSaved: () => vo
         </div>
       </div>
       <div style={{marginTop:12, display:"flex", gap:8}}>
-        <Button onClick={save} disabled={saving || !fullName || !hierarchy}>{saving ? "Guardando..." : "Guardar"}</Button>
-        <Button onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}>Salir</Button>
+        <Button onClick={save} disabled={saving || !fullName || !hierarchy} style={{background:"#111", color:"#fff"}}>{saving ? "Guardando..." : "Guardar"}</Button>
+        <Button onClick={async()=> (await supabase.auth.signOut(), window.location.reload())} style={{color:"#000"}}>Salir</Button>
       </div>
     </Card>
   );
@@ -106,12 +87,11 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   const [month, setMonth] = useState(startOfMonth(new Date()));
   const [onlyFree, setOnlyFree] = useState(true);
 
-  // reservas y bloqueos
   const [reservedMap, setReservedMap] = useState<Set<string>>(new Set());
   const [myReservedSet, setMyReservedSet] = useState<Set<string>>(new Set());
   const [myDayData, setMyDayData] = useState<Record<string,{count:number;hours:number}>>({});
-  const [blackSlotSet, setBlackSlotSet] = useState<Set<string>>(new Set());        // date|slotId
-  const [blackPuestoSet, setBlackPuestoSet] = useState<Set<string>>(new Set());    // date|puestoId
+  const [blackSlotSet, setBlackSlotSet] = useState<Set<string>>(new Set());
+  const [blackPuestoSet, setBlackPuestoSet] = useState<Set<string>>(new Set());
 
   const monthStart = startOfMonth(month), monthEnd = endOfMonth(month);
   const daysInMonth = useMemo(()=>{ const res:Date[]=[]; const d = new Date(monthStart); while(d<=monthEnd){ res.push(new Date(d)); d.setDate(d.getDate()+1);} return res; },[monthStart,monthEnd]);
@@ -126,11 +106,9 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   })(); },[]);
 
   const refreshMonthData = async () => {
-    // ocupaciones (para todo el mes)
     const { data: resv } = await supabase.rpc("get_reserved", { month_start: iso(monthStart), month_end: iso(monthEnd) });
     const all = new Set<string>(); for (const r of resv||[]) all.add(`${r.date}|${r.time_slot_id}`); setReservedMap(all);
 
-    // mis reservas (para cancelar y sumar horas)
     const { data: myResv } = await supabase.from("reservations")
       .select("date,time_slot_id,time_slots(duration_hours)")
       .gte("date", iso(monthStart)).lte("date", iso(monthEnd));
@@ -142,7 +120,6 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
     }
     setMyDayData(agg); setMyReservedSet(mine);
 
-    // bloqueos
     const { data: b } = await supabase.from("blackouts").select("date, puesto_id, time_slot_id")
       .gte("date", iso(monthStart)).lte("date", iso(monthEnd));
     const bs = new Set<string>(), bp = new Set<string>();
@@ -168,61 +145,140 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   const cancelReservation = async (dateISO: string, slot: TimeSlot) => {
     const { data: { user } } = await supabase.auth.getUser();
     let q = supabase.from("reservations").delete().eq("date", dateISO).eq("time_slot_id", slot.id);
-    if (!profile.is_admin) q = q.eq("user_id", user?.id);  // usuario normal: solo la suya
+    if (!profile.is_admin) q = q.eq("user_id", user?.id);
     const { error } = await q;
     if (error) return alert(error.message);
     await refreshMonthData(); alert("✅ Turno liberado");
   };
 
-  const exportCSV = async () => {
-    const data = await supabase.rpc("export_reservations", { month_start: iso(monthStart), month_end: iso(monthEnd) });
-    if ((data as any).error) return alert((data as any).error.message);
-    const rows = ((data as any).data || []) as any[];
-    const header = ["fecha","puesto","turno","inicio","fin","horas","nombre","jerarquia"];
-    const csv = [header.join(","), ...rows.map((r)=>[r.date,r.puesto,r.slot,r.start_time,r.end_time,r.duration,r.full_name,r.hierarchy].join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a");
-    a.href = url; a.download = `reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.csv`; a.click();
-    URL.revokeObjectURL(url);
+  // ======== Exportar TODO (admin) -> Excel .XLS ========
+  const exportAllXLS = async () => {
+    const { data, error } = await supabase.rpc("export_reservations", {
+      month_start: iso(monthStart),
+      month_end: iso(monthEnd),
+    });
+    if (error) return alert(error.message);
+    const rows = data || [];
+
+    const header = ["JERARQUIA","APELLIDO Y NOMBRE","PUESTO","FECHA","HORARIOS","RESTO DE LA INFORMACIÓN"];
+    const fmtFecha = (isoDate: string) => {
+      const [y,m,d] = (isoDate||"").split("-");
+      return (y && m && d) ? `${d}/${m}/${y}` : (isoDate||"");
+    };
+    const restoInfo = (r:any) => {
+      const parts:string[] = [];
+      if (r.usuario)  parts.push(`USUARIO=${r.usuario}`);
+      if (r.duration) parts.push(`DURACION=${r.duration}h`);
+      if (r.slot)     parts.push(`TURNO=${r.slot}`);
+      return parts.join(" | ");
+    };
+
+    const aoa = [
+      header,
+      ...rows.map((r:any)=>[
+        r.hierarchy ?? "",
+        r.full_name ?? "",
+        r.puesto ?? "",
+        fmtFecha(r.date),
+        `${r.start_time ?? ""}-${r.end_time ?? ""}`,
+        restoInfo(r),
+      ])
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Reservas");
+    XLSX.writeFile(wb, `reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xls`, { bookType: "xls" });
+  };
+
+  // ======== Exportar SOLO MIS reservas -> Excel .XLS ========
+  const exportMyXLS = async () => {
+    const { data: udata, error: uerr } = await supabase.auth.getUser();
+    if (uerr) return alert("Error de sesión: " + uerr.message);
+    if (!udata?.user) return alert("Tenés que iniciar sesión para exportar tus reservas.");
+
+    const { data, error } = await supabase.rpc("export_my_reservations", {
+      month_start: iso(monthStart),
+      month_end: iso(monthEnd),
+    });
+    if (error) return alert("Error al leer tus reservas: " + error.message);
+
+    const rows = data || [];
+    if (rows.length === 0) return alert("No encontré reservas tuyas entre " + iso(monthStart) + " y " + iso(monthEnd) + ".");
+
+    const header = ["JERARQUIA","APELLIDO Y NOMBRE","PUESTO","DÍA","HORARIO","HORARIO","USUARIO"];
+    const fmtDia = (isoDate: string) => {
+      const [y,m,d] = (isoDate||"").split("-");
+      return (y && m && d) ? `${d}/${m}/${y}` : (isoDate||"");
+    };
+
+    const aoa = [
+      header,
+      ...rows.map((r:any)=>[
+        r.hierarchy ?? "",
+        r.full_name ?? "",
+        r.puesto ?? "",
+        fmtDia(r.date),
+        r.start_time ?? "",
+        r.end_time ?? "",
+        r.usuario ?? "",
+      ])
+    ];
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Mis reservas");
+    XLSX.writeFile(wb, `mis-reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xls`, { bookType: "xls" });
   };
 
   return (
     <div style={{maxWidth:1100, margin:"20px auto", padding:16}}>
+      {/* ENCABEZADO + BOTONES */}
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap:12}}>
         <div>
-          <h2 style={{margin:0}}>Reservá tus turnos</h2>
-          <div style={{fontSize:14, opacity:.8}}>
+          <h2 style={{margin:0, color:"#000"}}>Reservá tus turnos</h2>
+          <div style={{fontSize:14, opacity:.8, color:"#000"}}>
             {profile?.full_name} — <Badge>{profile?.hierarchy || "Sin jerarquía"}</Badge> {profile.is_admin && <Badge>Admin</Badge>}
           </div>
         </div>
         <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
-          {profile.is_admin && <Button onClick={onOpenAdmin}>Administrar</Button>}
-          <Button onClick={exportCSV}>Exportar Excel (CSV)</Button>
-          <Button onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}>Salir</Button>
+          {profile.is_admin && (
+            <>
+              <Button onClick={onOpenAdmin} style={{background:"#111", color:"#fff"}}>Administrar</Button>
+              <Button onClick={exportAllXLS} style={{background:"#111", color:"#fff"}}>Exportar todo (Excel .XLS)</Button>
+            </>
+          )}
+          <Button onClick={exportMyXLS} style={{background:"#111", color:"#fff"}}>Mis reservas (Excel .XLS)</Button>
+          <Button onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}
+                  style={{background:"#fff", color:"#000", borderColor:"#000"}}>
+            Salir
+          </Button>
         </div>
       </div>
 
       <Card>
+        {/* Controles de mes/puesto */}
         <div style={{display:"flex", gap:12, flexWrap:"wrap", alignItems:"center"}}>
           <div style={{display:"flex", alignItems:"center", gap:8}}>
-            <Button onClick={()=>setMonth(addMonths(month, -1))}>◀</Button>
-            <div style={{minWidth:160, textAlign:"center", fontWeight:600}}>
+            <Button onClick={()=>setMonth(addMonths(month, -1))} style={{background:"#111", color:"#fff"}}>◀</Button>
+            <div style={{minWidth:160, textAlign:"center", fontWeight:600, color:"#000"}}>
               {month.toLocaleDateString("es-AR", { month:"long", year:"numeric" })}
             </div>
-            <Button onClick={()=>setMonth(addMonths(month, 1))}>▶</Button>
+            <Button onClick={()=>setMonth(addMonths(month, 1))} style={{background:"#111", color:"#fff"}}>▶</Button>
           </div>
-          <div style={{display:"flex", alignItems:"center", gap:8}}>
-            <label style={{fontSize:14, opacity:.8}}>Puesto</label>
+          <div style={{display:"flex", alignItems:"center", gap:8, color:"#000"}}>
+            <label style={{fontSize:14, opacity:.8, color:"#000"}}>Puesto</label>
             <select value={selectedPuesto} onChange={(e)=>setSelectedPuesto(Number(e.target.value))}
                     style={{padding:"8px 10px", border:"1px solid #ddd", borderRadius:12}}>
               {puestos.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
-          <label style={{display:"inline-flex", alignItems:"center", gap:6, fontSize:14}}>
+          <label style={{display:"inline-flex", alignItems:"center", gap:6, fontSize:14, color:"#000"}}>
             <input type="checkbox" checked={onlyFree} onChange={(e)=>setOnlyFree(e.target.checked)} /> Ver solo disponibles
           </label>
         </div>
 
+        {/* Tabla */}
         <div style={{marginTop:12, overflowX:"auto"}}>
           <table className="min-w-full text-sm">
             <thead>
@@ -247,9 +303,8 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
                       <div style={{fontSize:11, opacity:.7}}>{myDay.hours}h / {myDay.count} turnos</div>
                     </td>
                     {slots.filter(s=>s.puesto_id===selectedPuesto).map((s) => {
-                      // Ocultar SALON 10-14 de lunes a jueves
                       const puestoName = puestos.find(p=>p.id===selectedPuesto)?.name;
-                      const dow = d.getDay(); // 0=Dom..6=Sáb
+                      const dow = d.getDay();
                       if (puestoName==='SALON' && (dow>=1 && dow<=4) && s.label==='10:00-14:00') return <td key={s.id} className="p-2" />;
 
                       const closed = blackSlotSet.has(`${dateISO}|${s.id}`) || blackPuestoSet.has(`${dateISO}|${s.puesto_id}`);
@@ -269,7 +324,8 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
                         if (mine || profile.is_admin) {
                           return (
                             <td key={s.id} className="p-2">
-                              <Button className="w-full" onClick={()=>cancelReservation(dateISO, s)}>
+                              <Button className="w-full" style={{background:"#111", color:"#fff"}}
+                                      onClick={()=>cancelReservation(dateISO, s)}>
                                 {mine ? "Cancelar" : "Liberar"}
                               </Button>
                             </td>
@@ -284,7 +340,7 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
 
                       return (
                         <td key={s.id} className="p-2">
-                          <Button className="w-full" onClick={()=>tryReserve(dateISO, s)}>
+                          <Button className="w-full" style={{background:"#111", color:"#fff"}} onClick={()=>tryReserve(dateISO, s)}>
                             Reservar
                           </Button>
                         </td>
@@ -342,8 +398,8 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  if (!sessionChecked) return <div style={{padding:24}}>Cargando...</div>;
-  if (processingFromLink) return <div style={{padding:24}}>Procesando tu acceso…</div>;
+  if (!sessionChecked) return <div style={{padding:24, color:"#000"}}>Cargando...</div>;
+  if (processingFromLink) return <div style={{padding:24, color:"#000"}}>Procesando tu acceso…</div>;
   if (!profile) return <div style={{maxWidth:420, margin:"40px auto"}}><AuthCard onSignedIn={loadProfile}/></div>;
   if (!profile.full_name || !profile.hierarchy) return <div style={{maxWidth:700, margin:"30px auto"}}><ProfileForm profile={profile} onSaved={loadProfile}/></div>;
   if (showAdmin && profile.is_admin) return <AdminPanel onClose={()=>setShowAdmin(false)} />;
