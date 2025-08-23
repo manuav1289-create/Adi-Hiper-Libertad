@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
 import AdminPanel from "./components/AdminPanel";
-import * as XLSX from "xlsx"; // <-- para generar Excel
+import * as XLSX from "xlsx"; // <= para generar .xlsx
 
 // === FECHAS ===
 function startOfMonth(d: Date) { const x = new Date(d.getFullYear(), d.getMonth(), 1); x.setHours(0,0,0,0); return x; }
@@ -11,9 +11,9 @@ function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getM
 function iso(d: Date) { return d.toISOString().slice(0,10); }
 
 // === UI helpers ===
-const Badge = (p:any)=><span style={{padding:"2px 8px",borderRadius:999,background:"#eee",fontSize:12,color:"#000"}}>{p.children}</span>;
-const Button = ({ children, ...props }: any) => <button style={{border:"1px solid #ddd",borderRadius:16,padding:"8px 14px",background:"#fff",color:"#000"}} {...props}>{children}</button>;
-const Card = (p:any)=><div style={{border:"1px solid #e5e7eb",borderRadius:16,padding:16,background:"#fff",color:"#000"}}>{p.children}</div>;
+const Badge = (p:any)=><span style={{padding:"2px 8px",borderRadius:999,background:"#eee",fontSize:12, color:"#000"}}>{p.children}</span>;
+const Button = ({ children, ...props }: any) => <button style={{border:"1px solid #ddd",borderRadius:16,padding:"8px 14px",background:"#fff", color:"#000"}} {...props}>{children}</button>;
+const Card = (p:any)=><div style={{border:"1px solid #e5e7eb",borderRadius:16,padding:16,background:"#fff", color:"#000"}}>{p.children}</div>;
 
 // === Tipos ===
 type Puesto = { id: number; name: string };
@@ -87,11 +87,12 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   const [month, setMonth] = useState(startOfMonth(new Date()));
   const [onlyFree, setOnlyFree] = useState(true);
 
+  // reservas y bloqueos
   const [reservedMap, setReservedMap] = useState<Set<string>>(new Set());
   const [myReservedSet, setMyReservedSet] = useState<Set<string>>(new Set());
   const [myDayData, setMyDayData] = useState<Record<string,{count:number;hours:number}>>({});
-  const [blackSlotSet, setBlackSlotSet] = useState<Set<string>>(new Set());
-  const [blackPuestoSet, setBlackPuestoSet] = useState<Set<string>>(new Set());
+  const [blackSlotSet, setBlackSlotSet] = useState<Set<string>>(new Set());        // date|slotId
+  const [blackPuestoSet, setBlackPuestoSet] = useState<Set<string>>(new Set());    // date|puestoId
 
   const monthStart = startOfMonth(month), monthEnd = endOfMonth(month);
   const daysInMonth = useMemo(()=>{ const res:Date[]=[]; const d = new Date(monthStart); while(d<=monthEnd){ res.push(new Date(d)); d.setDate(d.getDate()+1);} return res; },[monthStart,monthEnd]);
@@ -151,84 +152,58 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
     await refreshMonthData(); alert("✅ Turno liberado");
   };
 
-  // ======== Exportar TODO (admin) -> Excel .XLS ========
-  const exportAllXLS = async () => {
-    const { data, error } = await supabase.rpc("export_reservations", {
-      month_start: iso(monthStart),
-      month_end: iso(monthEnd),
-    });
-    if (error) return alert(error.message);
-    const rows = data || [];
-
+  // ===== Helpers para XLSX =====
+  const clean = (v:any) => (v===null||v===undefined) ? "" : String(v).replace(/\r?\n/g," ").trim();
+  const fmtFecha = (isoDate:string) => {
+    const [y,m,d] = (isoDate||"").split("-");
+    return (y&&m&&d) ? `${d}/${m}/${y}` : (isoDate||"");
+  };
+  const restoInfo = (r:any) => {
+    const parts:string[] = [];
+    if (r.usuario)  parts.push(`USUARIO=${clean(r.usuario)}`);
+    if (r.duration) parts.push(`DURACION=${clean(r.duration)}h`);
+    if (r.slot)     parts.push(`TURNO=${clean(r.slot)}`);
+    return parts.join(" | ");
+  };
+  const buildAOA = (rows:any[]) => {
     const header = ["JERARQUIA","APELLIDO Y NOMBRE","PUESTO","FECHA","HORARIOS","RESTO DE LA INFORMACIÓN"];
-    const fmtFecha = (isoDate: string) => {
-      const [y,m,d] = (isoDate||"").split("-");
-      return (y && m && d) ? `${d}/${m}/${y}` : (isoDate||"");
-    };
-    const restoInfo = (r:any) => {
-      const parts:string[] = [];
-      if (r.usuario)  parts.push(`USUARIO=${r.usuario}`);
-      if (r.duration) parts.push(`DURACION=${r.duration}h`);
-      if (r.slot)     parts.push(`TURNO=${r.slot}`);
-      return parts.join(" | ");
-    };
-
-    const aoa = [
-      header,
-      ...rows.map((r:any)=>[
-        r.hierarchy ?? "",
-        r.full_name ?? "",
-        r.puesto ?? "",
-        fmtFecha(r.date),
-        `${r.start_time ?? ""}-${r.end_time ?? ""}`,
-        restoInfo(r),
-      ])
-    ];
-
+    const body = rows.map(r => ([
+      clean(r.hierarchy ?? ""),
+      clean(r.full_name ?? ""),
+      clean(r.puesto ?? ""),
+      fmtFecha(r.date),
+      `${clean(r.start_time ?? "")}-${clean(r.end_time ?? "")}`,
+      restoInfo(r),
+    ]));
+    return [header, ...body];
+  };
+  const downloadXLSX = (filename:string, aoa:any[]) => {
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Reservas");
-    XLSX.writeFile(wb, `reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xls`, { bookType: "xls" });
+    XLSX.writeFile(wb, filename); // descarga .xlsx
   };
 
-  // ======== Exportar SOLO MIS reservas -> Excel .XLS ========
-  const exportMyXLS = async () => {
-    const { data: udata, error: uerr } = await supabase.auth.getUser();
-    if (uerr) return alert("Error de sesión: " + uerr.message);
+  // ---- Exportar TODO (solo admin) —— XLSX en columnas ----
+  const exportCSV = async () => {
+    const { data, error } = await supabase.rpc("export_reservations", { month_start: iso(monthStart), month_end: iso(monthEnd) });
+    if (error) return alert(error.message);
+    const aoa = buildAOA(data || []);
+    const fname = `reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xlsx`;
+    downloadXLSX(fname, aoa);
+  };
+
+  // ---- Exportar SOLO MIS reservas —— XLSX en columnas ----
+  const exportMyCSV = async () => {
+    const { data: udata } = await supabase.auth.getUser();
     if (!udata?.user) return alert("Tenés que iniciar sesión para exportar tus reservas.");
-
-    const { data, error } = await supabase.rpc("export_my_reservations", {
-      month_start: iso(monthStart),
-      month_end: iso(monthEnd),
-    });
+    const { data, error } = await supabase.rpc("export_my_reservations", { month_start: iso(monthStart), month_end: iso(monthEnd) });
     if (error) return alert("Error al leer tus reservas: " + error.message);
-
     const rows = data || [];
-    if (rows.length === 0) return alert("No encontré reservas tuyas entre " + iso(monthStart) + " y " + iso(monthEnd) + ".");
-
-    const header = ["JERARQUIA","APELLIDO Y NOMBRE","PUESTO","DÍA","HORARIO","HORARIO","USUARIO"];
-    const fmtDia = (isoDate: string) => {
-      const [y,m,d] = (isoDate||"").split("-");
-      return (y && m && d) ? `${d}/${m}/${y}` : (isoDate||"");
-    };
-
-    const aoa = [
-      header,
-      ...rows.map((r:any)=>[
-        r.hierarchy ?? "",
-        r.full_name ?? "",
-        r.puesto ?? "",
-        fmtDia(r.date),
-        r.start_time ?? "",
-        r.end_time ?? "",
-        r.usuario ?? "",
-      ])
-    ];
-
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Mis reservas");
-    XLSX.writeFile(wb, `mis-reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xls`, { bookType: "xls" });
+    if (rows.length === 0) return alert(`No encontré reservas tuyas entre ${iso(monthStart)} y ${iso(monthEnd)}.`);
+    const aoa = buildAOA(rows);
+    const fname = `mis-reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xlsx`;
+    downloadXLSX(fname, aoa);
   };
 
   return (
@@ -245,12 +220,14 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
           {profile.is_admin && (
             <>
               <Button onClick={onOpenAdmin} style={{background:"#111", color:"#fff"}}>Administrar</Button>
-              <Button onClick={exportAllXLS} style={{background:"#111", color:"#fff"}}>Exportar todo (Excel .XLS)</Button>
+              <Button onClick={exportCSV} style={{background:"#111", color:"#fff"}}>Exportar todo (.XLSX)</Button>
             </>
           )}
-          <Button onClick={exportMyXLS} style={{background:"#111", color:"#fff"}}>Mis reservas (Excel .XLS)</Button>
-          <Button onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}
-                  style={{background:"#fff", color:"#000", borderColor:"#000"}}>
+          <Button onClick={exportMyCSV} style={{background:"#111", color:"#fff"}}>Mis reservas (.XLSX)</Button>
+          <Button
+            onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}
+            style={{background:"#fff", color:"#000", borderColor:"#000"}}
+          >
             Salir
           </Button>
         </div>
@@ -304,7 +281,7 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
                     </td>
                     {slots.filter(s=>s.puesto_id===selectedPuesto).map((s) => {
                       const puestoName = puestos.find(p=>p.id===selectedPuesto)?.name;
-                      const dow = d.getDay();
+                      const dow = d.getDay(); // 0=Dom..6=Sáb
                       if (puestoName==='SALON' && (dow>=1 && dow<=4) && s.label==='10:00-14:00') return <td key={s.id} className="p-2" />;
 
                       const closed = blackSlotSet.has(`${dateISO}|${s.id}`) || blackPuestoSet.has(`${dateISO}|${s.puesto_id}`);
