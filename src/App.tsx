@@ -2,7 +2,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
 import AdminPanel from "./components/AdminPanel";
-import * as XLSX from "xlsx"; // <= para generar .xlsx
 
 // === FECHAS ===
 function startOfMonth(d: Date) { const x = new Date(d.getFullYear(), d.getMonth(), 1); x.setHours(0,0,0,0); return x; }
@@ -11,14 +10,18 @@ function addMonths(d: Date, m: number) { return new Date(d.getFullYear(), d.getM
 function iso(d: Date) { return d.toISOString().slice(0,10); }
 
 // === UI helpers ===
-const Badge = (p:any)=><span style={{padding:"2px 8px",borderRadius:999,background:"#eee",fontSize:12, color:"#000"}}>{p.children}</span>;
+const Badge  = (p:any)=><span style={{padding:"2px 8px",borderRadius:999,background:"#eee",fontSize:12, color:"#000"}}>{p.children}</span>;
 const Button = ({ children, ...props }: any) => <button style={{border:"1px solid #ddd",borderRadius:16,padding:"8px 14px",background:"#fff", color:"#000"}} {...props}>{children}</button>;
-const Card = (p:any)=><div style={{border:"1px solid #e5e7eb",borderRadius:16,padding:16,background:"#fff", color:"#000"}}>{p.children}</div>;
+const Card   = (p:any)=><div style={{border:"1px solid #e5e7eb",borderRadius:16,padding:16,background:"#fff", color:"#000"}}>{p.children}</div>;
 
 // === Tipos ===
 type Puesto = { id: number; name: string };
-type TimeSlot = { id: number; puesto_id: number; label: string; start_time: string; end_time: string; duration_hours: number };
-type Profile = { id: string; full_name: string | null; hierarchy: string | null; is_admin: boolean; restricted: boolean; allowed_puestos: number[] | null; allowed_time_slots: number[] | null; };
+type TimeSlot = { id: number; puesto_id: number; label: string; start_time: string; end_time: string; duration_hours: number; enabled?: boolean };
+type Profile = {
+  id: string; full_name: string | null; hierarchy: string | null; is_admin: boolean;
+  restricted: boolean; allowed_puestos: number[] | null; allowed_time_slots: number[] | null;
+  daily_max_slots: number; daily_max_hours: number; monthly_max_hours: number;
+};
 
 // === Auth simple ===
 function AuthCard({ onSignedIn }: { onSignedIn: () => void }) {
@@ -91,36 +94,53 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   const [reservedMap, setReservedMap] = useState<Set<string>>(new Set());
   const [myReservedSet, setMyReservedSet] = useState<Set<string>>(new Set());
   const [myDayData, setMyDayData] = useState<Record<string,{count:number;hours:number}>>({});
+  const [myMonthHours, setMyMonthHours] = useState(0);
   const [blackSlotSet, setBlackSlotSet] = useState<Set<string>>(new Set());        // date|slotId
   const [blackPuestoSet, setBlackPuestoSet] = useState<Set<string>>(new Set());    // date|puestoId
 
   const monthStart = startOfMonth(month), monthEnd = endOfMonth(month);
-  const daysInMonth = useMemo(()=>{ const res:Date[]=[]; const d = new Date(monthStart); while(d<=monthEnd){ res.push(new Date(d)); d.setDate(d.getDate()+1);} return res; },[monthStart,monthEnd]);
 
+  // cargar catálogos
   useEffect(()=>{ (async()=>{
     const [pRes,sRes] = await Promise.all([
       supabase.from("puestos").select("id,name").order("name"),
-      supabase.from("time_slots").select("id,puesto_id,label,start_time,end_time,duration_hours").order("puesto_id,start_time"),
+      supabase.from("time_slots").select("id,puesto_id,label,start_time,end_time,duration_hours,enabled").order("puesto_id,start_time"),
     ]);
-    setPuestos(pRes.data||[]); setSlots(sRes.data||[]);
-    if (pRes.data?.length && !selectedPuesto) setSelectedPuesto(pRes.data[0].id);
+    let p = (pRes.data||[]) as Puesto[];
+    // si el usuario está restringido, filtramos puestos permitidos
+    if (profile.restricted && profile.allowed_puestos?.length) {
+      const allow = new Set(profile.allowed_puestos);
+      p = p.filter(pp=>allow.has(pp.id));
+    }
+    setPuestos(p);
+    setSlots((sRes.data||[]) as TimeSlot[]);
+    // elegir puesto por defecto válido
+    if (p.length) {
+      if (!p.find(pp=>pp.id===selectedPuesto)) setSelectedPuesto(p[0].id);
+    }
   })(); },[]);
 
+  const daysInMonth = useMemo(()=>{ const res:Date[]=[]; const d = new Date(monthStart); while(d<=monthEnd){ res.push(new Date(d)); d.setDate(d.getDate()+1);} return res; },[monthStart,monthEnd]);
+
   const refreshMonthData = async () => {
+    // ocupaciones (todo el mes)
     const { data: resv } = await supabase.rpc("get_reserved", { month_start: iso(monthStart), month_end: iso(monthEnd) });
     const all = new Set<string>(); for (const r of resv||[]) all.add(`${r.date}|${r.time_slot_id}`); setReservedMap(all);
 
+    // mis reservas (para cancelar y sumar horas/contar mes)
     const { data: myResv } = await supabase.from("reservations")
       .select("date,time_slot_id,time_slots(duration_hours)")
       .gte("date", iso(monthStart)).lte("date", iso(monthEnd));
-    const mine = new Set<string>(); const agg:any = {};
+    const mine = new Set<string>(); const agg:any = {}; let monthH = 0;
     for (const r of myResv||[]) {
       const k = r.date as string; const dur = r.time_slots?.duration_hours || 0;
       agg[k] = agg[k] || {count:0, hours:0}; agg[k].count+=1; agg[k].hours+=dur;
+      monthH += dur;
       mine.add(`${r.date}|${r.time_slot_id}`);
     }
-    setMyDayData(agg); setMyReservedSet(mine);
+    setMyDayData(agg); setMyReservedSet(mine); setMyMonthHours(monthH);
 
+    // bloqueos
     const { data: b } = await supabase.from("blackouts").select("date, puesto_id, time_slot_id")
       .gte("date", iso(monthStart)).lte("date", iso(monthEnd));
     const bs = new Set<string>(), bp = new Set<string>();
@@ -132,10 +152,52 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   };
   useEffect(()=>{ refreshMonthData(); /* eslint-disable-next-line */}, [monthStart.getTime(), monthEnd.getTime()]);
 
+  // EXPORTAR TODO (XLSX simulado: TSV con extensión xls)
+  const downloadXLS = (rows:any[], filename:string) => {
+    const clean = (v:any)=> (v==null? "": String(v).replace(/\t/g," ").replace(/\r?\n/g," ").trim());
+    const header = ["JERARQUIA","APELLIDO Y NOMBRE","PUESTO","FECHA","HORARIOS","RESTO DE LA INFORMACIÓN"];
+    const fmtFecha = (d:string)=>{ const [y,m,dd]=(d||"").split("-"); return (y&&m&&dd)? `${dd}/${m}/${y}` : d; };
+    const restoInfo = (r:any)=> {
+      const parts:string[]=[];
+      if (r.usuario)  parts.push(`USUARIO=${clean(r.usuario)}`);
+      if (r.duration) parts.push(`DURACION=${clean(r.duration)}h`);
+      if (r.slot)     parts.push(`TURNO=${clean(r.slot)}`);
+      return parts.join(" | ");
+    };
+    const lines = rows.map(r=>[
+      clean(r.hierarchy??""), clean(r.full_name??""), clean(r.puesto??""),
+      fmtFecha(r.date), clean(`${r.start_time??""}-${r.end_time??""}`), restoInfo(r)
+    ].join("\t"));
+    const tsv = "\uFEFF"+[header.join("\t"), ...lines].join("\r\n");
+    const blob = new Blob([tsv], { type:"application/vnd.ms-excel" });
+    const url = URL.createObjectURL(blob); const a = document.createElement("a");
+    a.href=url; a.download = `${filename}.xls`; a.click(); URL.revokeObjectURL(url);
+  };
+
+  const exportAllXLS = async () => {
+    const { data, error } = await supabase.rpc("export_reservations", { month_start: iso(monthStart), month_end: iso(monthEnd) });
+    if (error) return alert(error.message);
+    downloadXLS(data||[], `reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}`);
+  };
+
+  const exportMyXLS = async () => {
+    const { data, error } = await supabase.rpc("export_my_reservations", { month_start: iso(monthStart), month_end: iso(monthEnd) });
+    if (error) return alert(error.message);
+    if (!data?.length) return alert("No tenés reservas en el mes visible.");
+    downloadXLS(data, `mis-reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}`);
+  };
+
   const tryReserve = async (dateISO: string, slot: TimeSlot) => {
+    // Límites del usuario (vienen de profile)
+    const maxSlots = profile.daily_max_slots ?? 2;
+    const maxDayH  = profile.daily_max_hours ?? 8;
+    const maxMonH  = profile.monthly_max_hours ?? 160;
+
     const cur = myDayData[dateISO] || { count: 0, hours: 0 };
-    if (cur.count >= 2) return alert("Límite diario: máximo 2 turnos.");
-    if (cur.hours + slot.duration_hours > 8) return alert("Límite diario: máximo 8 horas.");
+    if (cur.count >= maxSlots) return alert(`Límite diario: máximo ${maxSlots} turnos.`);
+    if (cur.hours + slot.duration_hours > maxDayH) return alert(`Límite diario: máximo ${maxDayH} horas.`);
+    if (myMonthHours + slot.duration_hours > maxMonH) return alert(`Límite mensual: máximo ${maxMonH} horas.`);
+
     const { data: { user } } = await supabase.auth.getUser();
     const payload = { user_id: user?.id, date: dateISO, time_slot_id: slot.id };
     const { error } = await supabase.from("reservations").insert(payload);
@@ -146,65 +208,23 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
   const cancelReservation = async (dateISO: string, slot: TimeSlot) => {
     const { data: { user } } = await supabase.auth.getUser();
     let q = supabase.from("reservations").delete().eq("date", dateISO).eq("time_slot_id", slot.id);
-    if (!profile.is_admin) q = q.eq("user_id", user?.id);
+    if (!profile.is_admin) q = q.eq("user_id", user?.id);  // usuario normal: solo la suya
     const { error } = await q;
     if (error) return alert(error.message);
     await refreshMonthData(); alert("✅ Turno liberado");
   };
 
-  // ===== Helpers para XLSX =====
-  const clean = (v:any) => (v===null||v===undefined) ? "" : String(v).replace(/\r?\n/g," ").trim();
-  const fmtFecha = (isoDate:string) => {
-    const [y,m,d] = (isoDate||"").split("-");
-    return (y&&m&&d) ? `${d}/${m}/${y}` : (isoDate||"");
-  };
-  const restoInfo = (r:any) => {
-    const parts:string[] = [];
-    if (r.usuario)  parts.push(`USUARIO=${clean(r.usuario)}`);
-    if (r.duration) parts.push(`DURACION=${clean(r.duration)}h`);
-    if (r.slot)     parts.push(`TURNO=${clean(r.slot)}`);
-    return parts.join(" | ");
-  };
-  const buildAOA = (rows:any[]) => {
-    const header = ["JERARQUIA","APELLIDO Y NOMBRE","PUESTO","FECHA","HORARIOS","RESTO DE LA INFORMACIÓN"];
-    const body = rows.map(r => ([
-      clean(r.hierarchy ?? ""),
-      clean(r.full_name ?? ""),
-      clean(r.puesto ?? ""),
-      fmtFecha(r.date),
-      `${clean(r.start_time ?? "")}-${clean(r.end_time ?? "")}`,
-      restoInfo(r),
-    ]));
-    return [header, ...body];
-  };
-  const downloadXLSX = (filename:string, aoa:any[]) => {
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Reservas");
-    XLSX.writeFile(wb, filename); // descarga .xlsx
-  };
-
-  // ---- Exportar TODO (solo admin) —— XLSX en columnas ----
-  const exportCSV = async () => {
-    const { data, error } = await supabase.rpc("export_reservations", { month_start: iso(monthStart), month_end: iso(monthEnd) });
-    if (error) return alert(error.message);
-    const aoa = buildAOA(data || []);
-    const fname = `reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xlsx`;
-    downloadXLSX(fname, aoa);
-  };
-
-  // ---- Exportar SOLO MIS reservas —— XLSX en columnas ----
-  const exportMyCSV = async () => {
-    const { data: udata } = await supabase.auth.getUser();
-    if (!udata?.user) return alert("Tenés que iniciar sesión para exportar tus reservas.");
-    const { data, error } = await supabase.rpc("export_my_reservations", { month_start: iso(monthStart), month_end: iso(monthEnd) });
-    if (error) return alert("Error al leer tus reservas: " + error.message);
-    const rows = data || [];
-    if (rows.length === 0) return alert(`No encontré reservas tuyas entre ${iso(monthStart)} y ${iso(monthEnd)}.`);
-    const aoa = buildAOA(rows);
-    const fname = `mis-reservas-${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,"0")}.xlsx`;
-    downloadXLSX(fname, aoa);
-  };
+  // Puestos visibles según restricción
+  const visiblePuestos = puestos;
+  // Slots visibles según: puesto seleccionado, slot habilitado, y (opcional) allowed_time_slots
+  const visibleSlots = useMemo(()=>{
+    let arr = slots.filter(s=>s.puesto_id===selectedPuesto && (s.enabled!==false));
+    if (profile.restricted && profile.allowed_time_slots?.length) {
+      const allow = new Set(profile.allowed_time_slots);
+      arr = arr.filter(s=>allow.has(s.id));
+    }
+    return arr;
+  }, [slots, selectedPuesto, profile.restricted, profile.allowed_time_slots]);
 
   return (
     <div style={{maxWidth:1100, margin:"20px auto", padding:16}}>
@@ -220,10 +240,10 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
           {profile.is_admin && (
             <>
               <Button onClick={onOpenAdmin} style={{background:"#111", color:"#fff"}}>Administrar</Button>
-              <Button onClick={exportCSV} style={{background:"#111", color:"#fff"}}>Exportar todo (.XLSX)</Button>
+              <Button onClick={exportAllXLS} style={{background:"#111", color:"#fff"}}>Exportar todo (XLSX)</Button>
             </>
           )}
-          <Button onClick={exportMyCSV} style={{background:"#111", color:"#fff"}}>Mis reservas (.XLSX)</Button>
+          <Button onClick={exportMyXLS} style={{background:"#111", color:"#fff"}}>Mis reservas (XLSX)</Button>
           <Button
             onClick={async()=> (await supabase.auth.signOut(), window.location.reload())}
             style={{background:"#fff", color:"#000", borderColor:"#000"}}
@@ -247,7 +267,7 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
             <label style={{fontSize:14, opacity:.8, color:"#000"}}>Puesto</label>
             <select value={selectedPuesto} onChange={(e)=>setSelectedPuesto(Number(e.target.value))}
                     style={{padding:"8px 10px", border:"1px solid #ddd", borderRadius:12}}>
-              {puestos.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {visiblePuestos.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
           <label style={{display:"inline-flex", alignItems:"center", gap:6, fontSize:14, color:"#000"}}>
@@ -261,7 +281,7 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
             <thead>
               <tr>
                 <th className="text-left p-2">Día</th>
-                {slots.filter(s=>s.puesto_id===selectedPuesto).map(s=>(
+                {visibleSlots.map(s=>(
                   <th key={s.id} className="p-2 text-left">
                     <div style={{fontWeight:600}}>{s.label}</div>
                     <div style={{fontSize:11, opacity:.7}}>{s.start_time}–{s.end_time} · {s.duration_hours}h</div>
@@ -279,18 +299,14 @@ function BookingView({ profile, onOpenAdmin }: { profile: Profile; onOpenAdmin: 
                       <div style={{fontWeight:600}}>{d.toLocaleDateString("es-AR", { weekday: "short", day: "2-digit" })}</div>
                       <div style={{fontSize:11, opacity:.7}}>{myDay.hours}h / {myDay.count} turnos</div>
                     </td>
-                    {slots.filter(s=>s.puesto_id===selectedPuesto).map((s) => {
-                      const puestoName = puestos.find(p=>p.id===selectedPuesto)?.name;
-                      const dow = d.getDay(); // 0=Dom..6=Sáb
-                      if (puestoName==='SALON' && (dow>=1 && dow<=4) && s.label==='10:00-14:00') return <td key={s.id} className="p-2" />;
-
+                    {visibleSlots.map((s) => {
+                      // Cierres/bloqueos
                       const closed = blackSlotSet.has(`${dateISO}|${s.id}`) || blackPuestoSet.has(`${dateISO}|${s.puesto_id}`);
                       const reserved = reservedMap.has(`${dateISO}|${s.id}`);
                       const mine = myReservedSet.has(`${dateISO}|${s.id}`);
                       const show = onlyFree ? (!reserved && !closed) : true;
 
                       if (!show) return <td key={s.id} className="p-2" style={{textAlign:"center", opacity:.4}}>—</td>;
-
                       if (closed) return (
                         <td key={s.id} className="p-2">
                           <Button className="w-full" disabled style={{opacity:.6}}>Cerrado</Button>
@@ -346,9 +362,13 @@ export default function App() {
     if (!user) return setProfile(null);
     const { data: p } = await supabase
       .from("profiles")
-      .select("id, full_name, hierarchy, is_admin, restricted, allowed_puestos, allowed_time_slots")
+      .select("id, full_name, hierarchy, is_admin, restricted, allowed_puestos, allowed_time_slots, daily_max_slots, daily_max_hours, monthly_max_hours")
       .eq("id", user.id).single();
-    setProfile((p as any) || { id: user.id, full_name: null, hierarchy: null, is_admin: false, restricted: false, allowed_puestos: null, allowed_time_slots: null });
+    setProfile((p as any) || {
+      id: user.id, full_name: null, hierarchy: null, is_admin: false,
+      restricted: false, allowed_puestos: null, allowed_time_slots: null,
+      daily_max_slots: 2, daily_max_hours: 8, monthly_max_hours: 160
+    });
   };
 
   useEffect(() => {
